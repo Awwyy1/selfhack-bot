@@ -1,0 +1,17 @@
+{
+  "name": "selfhack-bot",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "SelfHack AI Coach Telegram Bot",
+  "main": "api/webhook.js",
+  "scripts": {
+    "dev": "vercel dev"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.20.8",
+    "@supabase/supabase-js": "^2.43.4"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
