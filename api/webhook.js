@@ -28,7 +28,7 @@ export default async function handler(req, res) {
 
     // ========== КОМАНДА /start ==========
     if (messageText === '/start') {
-      const welcomeMessage = `Hey! I'm your AI coach 🚀\n\nI'm here to help you achieve your goals through daily accountability.\n\nJust chat with me like a friend. What's on your mind today?`;
+      const welcomeMessage = `Привет! Я не советчик — я коуч, который задаёт вопросы.\n\nЧто ты хочешь изменить прямо сейчас?\n\nПобороть прокрастинацию? Найти фокус? Разобраться с целями? Или у тебя свой запрос?\n\nПиши мне — попробуем решить.`;
       await sendMessage(BOT_TOKEN, chatId, welcomeMessage);
       return res.status(200).json({ ok: true });
     }
