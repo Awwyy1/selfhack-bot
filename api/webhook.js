@@ -80,19 +80,20 @@ export default async function handler(req, res) {
     // Показать индикатор "печатает..."
     await sendChatAction(BOT_TOKEN, chatId, 'typing');
 
-    // Загрузить ВСЮ историю чата (не только 5 последних)
+    // Загрузить ПОСЛЕДНИЕ 50 сообщений
     const { data: historyData, error: historyError } = await supabase
       .from('telegram_chats')
       .select('role, content')
       .eq('telegram_user_id', userId)
-      .order('created_at', { ascending: true })
-      .limit(50); // Последние 50 сообщений
+      .order('created_at', { ascending: false })
+      .limit(50);
     
     if (historyError) {
       console.error('❌ History load error:', historyError);
     }
 
-    const conversationHistory = historyData || [];
+    // Развернуть обратно (старые → новые для Claude API)
+    const conversationHistory = historyData ? historyData.reverse() : [];
     
     console.log(`📚 Loaded ${conversationHistory.length} messages from history`);
 
