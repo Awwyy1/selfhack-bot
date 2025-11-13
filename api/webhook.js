@@ -46,7 +46,6 @@ export default async function handler(req, res) {
             })
           });
 
-          // Сохранить invoice_id для проверки позже
           await supabase.from('pending_payments').insert({
             telegram_user_id: callbackUserId,
             invoice_id: invoice.invoice_id,
@@ -102,6 +101,15 @@ export default async function handler(req, res) {
 
     // ========== КОМАНДА /stats ==========
     if (messageText === '/stats') {
+      const { data: subscription } = await supabase
+        .from('subscriptions')
+        .select('*')
+        .eq('telegram_user_id', userId)
+        .eq('status', 'active')
+        .maybeSingle();
+
+      const isPremium = subscription && new Date(subscription.expires_at) > new Date();
+
       const { data, error } = await supabase
         .from('telegram_chats')
         .select('role', { count: 'exact' })
@@ -115,17 +123,27 @@ export default async function handler(req, res) {
         const aiMessages = data.filter(m => m.role === 'assistant').length;
         const total = data.length;
 
-        const statsMessage = `📊 *Your Stats:*\n\n` +
-          `Total messages: ${total}\n` +
-          `Your messages: ${userMessages}\n` +
-          `AI responses: ${aiMessages}`;
+        let planInfo = '';
+        if (isPremium) {
+          const planName = subscription.plan === 'premium' ? '💎 Premium' : '🏆 Pro';
+          const expiresDate = new Date(subscription.expires_at).toLocaleDateString('ru-RU');
+          planInfo = `Тариф: ${planName} (до ${expiresDate})\n\n`;
+        } else {
+          const remaining = 50 - userMessages;
+          planInfo = `Тариф: 📦 FREE (осталось ${remaining}/50 сообщений)\n\n`;
+        }
+
+        const statsMessage = `📊 *Твоя статистика:*\n\n${planInfo}` +
+          `Всего сообщений: ${total}\n` +
+          `Твоих: ${userMessages}\n` +
+          `От AI: ${aiMessages}`;
 
         await sendMessage(BOT_TOKEN, chatId, statsMessage);
       }
       return res.status(200).json({ ok: true });
     }
 
-      // ========== КОМАНДА /premium ==========
+    // ========== КОМАНДА /premium ==========
     if (messageText === '/premium') {
       const premiumKeyboard = {
         inline_keyboard: [
@@ -148,7 +166,7 @@ export default async function handler(req, res) {
       });
 
       return res.status(200).json({ ok: true });
-    } 
+    }
 
     // ========== КОМАНДА /activate ==========
     if (messageText.startsWith('/activate ')) {
@@ -158,9 +176,9 @@ export default async function handler(req, res) {
         .from('promo_codes')
         .select('*')
         .eq('code', promoCode)
-        .single();
+        .maybeSingle();
 
-      if (promoError || !promo) {
+      if (!promo) {
         await sendMessage(BOT_TOKEN, chatId, '❌ Промокод не найден или уже использован.');
         return res.status(200).json({ ok: true });
       }
@@ -197,8 +215,8 @@ export default async function handler(req, res) {
       );
 
       return res.status(200).json({ ok: true });
-    }    
-    
+    }
+
     // ========== КОМАНДА /checkin ==========
     if (messageText === '/checkin') {
       const today = new Date().toISOString().split('T')[0];
@@ -253,13 +271,48 @@ export default async function handler(req, res) {
       console.log(`✅ Checkin: user ${userId}, streak ${streak}`);
       return res.status(200).json({ ok: true });
     }
-    
+
+    // ========== ПРОВЕРКА ЛИМИТОВ FREE ==========
+    const { data: subscription } = await supabase
+      .from('subscriptions')
+      .select('*')
+      .eq('telegram_user_id', userId)
+      .eq('status', 'active')
+      .maybeSingle();
+
+    const isPremium = subscription && new Date(subscription.expires_at) > new Date();
+
+    if (!isPremium) {
+      const { count: totalMessages } = await supabase
+        .from('telegram_chats')
+        .select('*', { count: 'exact', head: true })
+        .eq('telegram_user_id', userId)
+        .eq('role', 'user');
+
+      const FREE_LIMIT = 50;
+
+      if (totalMessages >= FREE_LIMIT) {
+        await sendMessage(
+          BOT_TOKEN,
+          chatId,
+          `📦 Ты достиг лимита FREE тарифа (${FREE_LIMIT} сообщений).\n\nДля продолжения:\n💎 /premium — купить подписку\n🎟️ /activate [код] — активировать промокод`
+        );
+        return res.status(200).json({ ok: true });
+      }
+
+      if (totalMessages === FREE_LIMIT - 5) {
+        await sendMessage(
+          BOT_TOKEN,
+          chatId,
+          `⚠️ Осталось 5 сообщений FREE тарифа.\n\nПолучи безлимит: /premium`
+        );
+      }
+    }
+
     // ========== ОБРАБОТКА ОБЫЧНОГО СООБЩЕНИЯ ==========
     
-    // Показать индикатор "печатает..."
     await sendChatAction(BOT_TOKEN, chatId, 'typing');
 
-    // Загрузить ПОСЛЕДНИЕ 50 сообщений
     const { data: historyData, error: historyError } = await supabase
       .from('telegram_chats')
       .select('role, content')
@@ -271,18 +324,15 @@ export default async function handler(req, res) {
       console.error('❌ History load error:', historyError);
     }
 
-    // Развернуть обратно (старые → новые для Claude API)
     const conversationHistory = historyData ? historyData.reverse() : [];
     
     console.log(`📚 Loaded ${conversationHistory.length} messages from history`);
 
-    // Добавить текущее сообщение юзера
     const messages = [
       ...conversationHistory,
       { role: 'user', content: messageText }
     ];
 
-    // Отправить в Claude API
     const aiResponse = await anthropic.messages.create({
       model: MODEL,
       max_tokens: 200,
@@ -296,21 +346,18 @@ export default async function handler(req, res) {
 
     console.log(`🤖 AI Response (${wordCount} words): ${reply}`);
 
-    // Сохранить сообщение юзера в БД
     await supabase.from('telegram_chats').insert({
       telegram_user_id: userId,
       role: 'user',
       content: messageText
     });
 
-    // Сохранить ответ AI в БД
     await supabase.from('telegram_chats').insert({
       telegram_user_id: userId,
       role: 'assistant',
       content: reply
     });
 
-    // Отправить ответ в Telegram
     await sendMessage(BOT_TOKEN, chatId, reply);
 
     return res.status(200).json({ ok: true });
@@ -318,7 +365,6 @@ export default async function handler(req, res) {
   } catch (error) {
     console.error('❌ Webhook error:', error);
     
-    // Попытаться отправить сообщение об ошибке юзеру
     if (req.body?.message?.chat?.id) {
       try {
         await sendMessage(
