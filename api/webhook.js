@@ -13,6 +13,56 @@ export default async function handler(req, res) {
 
   try {
     const update = req.body;
+
+    // ========== ОБРАБОТКА CALLBACK (КНОПОК) ==========
+    if (update.callback_query) {
+      const callbackData = update.callback_query.data;
+      const callbackChatId = update.callback_query.message.chat.id;
+      const callbackUserId = update.callback_query.from.id;
+
+      if (callbackData === 'buy_premium' || callbackData === 'buy_pro') {
+        const amount = callbackData === 'buy_premium' ? '10.99' : '25.99';
+        const plan = callbackData === 'buy_premium' ? 'Premium' : 'Pro';
+
+        try {
+          const { createInvoice } = await import('../lib/cryptobot.js');
+          const invoice = await createInvoice(
+            amount,
+            `SelfHack ${plan} (1 месяц)`,
+            callbackUserId
+          );
+
+          await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chat_id: callbackChatId,
+              text: `💳 Оплати ${plan} ($${amount}):\n\nОткрой ссылку для оплаты:`,
+              reply_markup: {
+                inline_keyboard: [[
+                  { text: `💰 Оплатить ${amount} USDT`, url: invoice.bot_invoice_url }
+                ]]
+              }
+            })
+          });
+
+          // Сохранить invoice_id для проверки позже
+          await supabase.from('pending_payments').insert({
+            telegram_user_id: callbackUserId,
+            invoice_id: invoice.invoice_id,
+            plan: plan.toLowerCase(),
+            amount: amount,
+            created_at: new Date()
+          });
+
+        } catch (error) {
+          console.error('❌ Payment error:', error);
+          await sendMessage(BOT_TOKEN, callbackChatId, 'Ошибка создания инвойса. Попробуй /premium ещё раз.');
+        }
+      }
+
+      return res.status(200).json({ ok: true });
+    }    
     
     // Проверяем что это текстовое сообщение
     if (!update.message || !update.message.text) {
