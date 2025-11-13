@@ -74,7 +74,62 @@ export default async function handler(req, res) {
       }
       return res.status(200).json({ ok: true });
     }
+     
+    // ========== КОМАНДА /checkin ==========
+    if (messageText === '/checkin') {
+      const today = new Date().toISOString().split('T')[0];
+      
+      const { data: existingCheckin } = await supabase
+        .from('checkins')
+        .select('*')
+        .eq('telegram_user_id', userId)
+        .eq('checkin_date', today)
+        .maybeSingle();
 
+      if (existingCheckin) {
+        await sendMessage(BOT_TOKEN, chatId, '✅ Ты уже сделал чекин сегодня! Увидимся завтра.');
+        return res.status(200).json({ ok: true });
+      }
+
+      const { error: insertError } = await supabase
+        .from('checkins')
+        .insert({ telegram_user_id: userId, checkin_date: today });
+
+      if (insertError) {
+        console.error('❌ Checkin error:', insertError);
+        await sendMessage(BOT_TOKEN, chatId, 'Ошибка при чекине. Попробуй ещё раз?');
+        return res.status(200).json({ ok: true });
+      }
+
+      const { data: allCheckins } = await supabase
+        .from('checkins')
+        .select('checkin_date')
+        .eq('telegram_user_id', userId)
+        .order('checkin_date', { ascending: false });
+
+      let streak = 1;
+      if (allCheckins && allCheckins.length > 1) {
+        for (let i = 0; i < allCheckins.length - 1; i++) {
+          const current = new Date(allCheckins[i].checkin_date);
+          const next = new Date(allCheckins[i + 1].checkin_date);
+          const diffDays = (current - next) / (1000 * 60 * 60 * 24);
+          if (diffDays === 1) {
+            streak++;
+          } else {
+            break;
+          }
+        }
+      }
+
+      const streakMessage = streak > 1 
+        ? `🔥 Чекин выполнен! Твой streak: ${streak} дней подряд. Продолжай!` 
+        : '✅ Чекин выполнен! Начинаем отсчёт streak.';
+
+      await sendMessage(BOT_TOKEN, chatId, streakMessage);
+      console.log(`✅ Checkin: user ${userId}, streak ${streak}`);
+      return res.status(200).json({ ok: true });
+    }
+    
     // ========== ОБРАБОТКА ОБЫЧНОГО СООБЩЕНИЯ ==========
     
     // Показать индикатор "печатает..."
