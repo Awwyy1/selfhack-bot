@@ -85,8 +85,9 @@ export default async function handler(req, res) {
       .from('telegram_chats')
       .select('role, content')
       .eq('telegram_user_id', userId)
-      .order('created_at', { ascending: true }); // ВСЯ ИСТОРИЯ
-
+      .order('created_at', { ascending: true })
+      .limit(50); // Последние 50 сообщений
+    
     if (historyError) {
       console.error('❌ History load error:', historyError);
     }
