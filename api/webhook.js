@@ -148,6 +148,55 @@ export default async function handler(req, res) {
       });
 
       return res.status(200).json({ ok: true });
+    } 
+
+    // ========== КОМАНДА /activate ==========
+    if (messageText.startsWith('/activate ')) {
+      const promoCode = messageText.replace('/activate ', '').trim().toUpperCase();
+
+      const { data: promo, error: promoError } = await supabase
+        .from('promo_codes')
+        .select('*')
+        .eq('code', promoCode)
+        .single();
+
+      if (promoError || !promo) {
+        await sendMessage(BOT_TOKEN, chatId, '❌ Промокод не найден или уже использован.');
+        return res.status(200).json({ ok: true });
+      }
+
+      if (promo.used_count >= promo.max_uses) {
+        await sendMessage(BOT_TOKEN, chatId, '❌ Промокод уже использован максимальное количество раз.');
+        return res.status(200).json({ ok: true });
+      }
+
+      if (promo.expires_at && new Date(promo.expires_at) < new Date()) {
+        await sendMessage(BOT_TOKEN, chatId, '❌ Промокод истёк.');
+        return res.status(200).json({ ok: true });
+      }
+
+      const expiresAt = new Date();
+      expiresAt.setMonth(expiresAt.getMonth() + 1);
+
+      await supabase.from('subscriptions').upsert({
+        telegram_user_id: userId,
+        plan: promo.plan,
+        expires_at: expiresAt,
+        status: 'active'
+      });
+
+      await supabase.from('promo_codes')
+        .update({ used_count: promo.used_count + 1 })
+        .eq('code', promoCode);
+
+      const planName = promo.plan === 'premium' ? 'Premium' : 'Pro';
+      await sendMessage(
+        BOT_TOKEN,
+        chatId,
+        `🎉 Промокод активирован! ${planName} доступен до ${expiresAt.toLocaleDateString('ru-RU')}`
+      );
+
+      return res.status(200).json({ ok: true });
     }    
     
     // ========== КОМАНДА /checkin ==========
