@@ -74,7 +74,32 @@ export default async function handler(req, res) {
       }
       return res.status(200).json({ ok: true });
     }
-     
+
+      // ========== КОМАНДА /premium ==========
+    if (messageText === '/premium') {
+      const premiumKeyboard = {
+        inline_keyboard: [
+          [
+            { text: '💎 Premium $10.99/мес', callback_data: 'buy_premium' },
+            { text: '🏆 Pro $25.99/мес', callback_data: 'buy_pro' }
+          ]
+        ]
+      };
+
+      await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text: '🚀 Выбери тариф:\n\n💎 **Premium** ($10.99/мес):\n- Безлимитные сообщения\n- 5 целей\n- История 30 дней\n\n🏆 **Pro** ($25.99/мес):\n- Всё из Premium\n- AI-анализ\n- Отчёты\n- Голосовые сообщения',
+          parse_mode: 'Markdown',
+          reply_markup: premiumKeyboard
+        })
+      });
+
+      return res.status(200).json({ ok: true });
+    }    
+    
     // ========== КОМАНДА /checkin ==========
     if (messageText === '/checkin') {
       const today = new Date().toISOString().split('T')[0];
