@@ -1,6 +1,7 @@
 import { supabase } from '../lib/supabase.js';
 import { anthropic, COACHING_SYSTEM } from '../lib/claude.js';
 import { sendMessage, sendChatAction } from '../lib/telegram.js';
+import { checkAndCreateSummary, loadConversationWithSummaries } from '../lib/summarizer.js';
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const MODEL = 'claude-sonnet-4-5-20250929';
@@ -313,23 +314,37 @@ export default async function handler(req, res) {
     
     await sendChatAction(BOT_TOKEN, chatId, 'typing');
 
-    // Определяем лимит истории в зависимости от подписки
-    const messageLimit = isPremium ? 300 : 50;
+    // Загрузить историю с учетом summarization для Premium
+    let conversationHistory = [];
 
-    const { data: historyData, error: historyError } = await supabase
-      .from('telegram_chats')
-      .select('role, content')
-      .eq('telegram_user_id', userId)
-      .order('created_at', { ascending: false })
-      .limit(messageLimit);
-    
-    if (historyError) {
-      console.error('❌ History load error:', historyError);
+    if (isPremium) {
+      // Premium: проверить нужно ли создать summary, затем загрузить с summaries
+      try {
+        await checkAndCreateSummary(userId);
+        conversationHistory = await loadConversationWithSummaries(userId, 50);
+      } catch (summaryError) {
+        console.error('⚠️ Summary error (fallback to regular history):', summaryError);
+        // Fallback: если summarization упал, загрузить обычную историю
+        const { data: historyData } = await supabase
+          .from('telegram_chats')
+          .select('role, content')
+          .eq('telegram_user_id', userId)
+          .order('created_at', { ascending: false })
+          .limit(50);
+        conversationHistory = historyData ? historyData.reverse() : [];
+      }
+    } else {
+      // FREE: только последние 50 сообщений
+      const { data: historyData } = await supabase
+        .from('telegram_chats')
+        .select('role, content')
+        .eq('telegram_user_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(50);
+      conversationHistory = historyData ? historyData.reverse() : [];
     }
-
-    const conversationHistory = historyData ? historyData.reverse() : [];
     
-    console.log(`📚 Loaded ${conversationHistory.length} messages from history (limit: ${messageLimit})`);
+    console.log(`📚 Loaded ${conversationHistory.length} messages from history (Premium: ${isPremium})`);
 
     const messages = [
       ...conversationHistory,
