@@ -159,7 +159,7 @@ export default async function handler(req, res) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           chat_id: chatId,
-          text: '🚀 Выбери тариф:\n\n💎 **Premium** ($10.99/мес):\n- Безлимитные сообщения\n- 5 целей\n- История 30 дней\n\n🏆 **Pro** ($25.99/мес):\n- Всё из Premium\n- AI-анализ\n- Отчёты\n- Голосовые сообщения',
+          text: '🚀 Выбери тариф:\n\n💎 **Premium** ($10.99/мес):\n- Безлимитные сообщения\n- 3 тональности коуча\n- История 30 дней\n\n🏆 **Pro** ($25.99/мес):\n- Всё из Premium\n- Безлимитная история\n- Еженедельные отчёты\n- Приоритетная поддержка',
           parse_mode: 'Markdown',
           reply_markup: premiumKeyboard
         })
@@ -313,12 +313,15 @@ export default async function handler(req, res) {
     
     await sendChatAction(BOT_TOKEN, chatId, 'typing');
 
+    // Определяем лимит истории в зависимости от подписки
+    const messageLimit = isPremium ? 300 : 50;
+
     const { data: historyData, error: historyError } = await supabase
       .from('telegram_chats')
       .select('role, content')
       .eq('telegram_user_id', userId)
       .order('created_at', { ascending: false })
-      .limit(50);
+      .limit(messageLimit);
     
     if (historyError) {
       console.error('❌ History load error:', historyError);
@@ -326,7 +329,7 @@ export default async function handler(req, res) {
 
     const conversationHistory = historyData ? historyData.reverse() : [];
     
-    console.log(`📚 Loaded ${conversationHistory.length} messages from history`);
+    console.log(`📚 Loaded ${conversationHistory.length} messages from history (limit: ${messageLimit})`);
 
     const messages = [
       ...conversationHistory,
