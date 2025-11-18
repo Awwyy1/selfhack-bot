@@ -1,7 +1,8 @@
 import { supabase } from '../lib/supabase.js';
-import { anthropic, COACHING_SYSTEM } from '../lib/claude.js';
+import { anthropic } from '../lib/claude.js';
 import { sendMessage, sendChatAction } from '../lib/telegram.js';
 import { checkAndCreateSummary, loadConversationWithSummaries } from '../lib/summarizer.js';
+import { getUserTone, setUserTone, getPromptByTone, getToneName, getToneDescription, isToneAvailableForFree } from '../lib/tone-manager.js';
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const MODEL = 'claude-sonnet-4-5-20250929';
@@ -21,6 +22,7 @@ export default async function handler(req, res) {
       const callbackChatId = update.callback_query.message.chat.id;
       const callbackUserId = update.callback_query.from.id;
 
+      // Обработка покупки Premium/Pro
       if (callbackData === 'buy_premium' || callbackData === 'buy_pro') {
         const amount = callbackData === 'buy_premium' ? '10.99' : '25.99';
         const plan = callbackData === 'buy_premium' ? 'Premium' : 'Pro';
@@ -61,6 +63,97 @@ export default async function handler(req, res) {
         }
       }
 
+      // Обработка выбора тональности
+      if (callbackData.startsWith('tone_')) {
+        const selectedTone = callbackData.replace('tone_', '');
+
+        // Проверка подписки для Mentor
+        if (selectedTone === 'mentor') {
+          const { data: subscription } = await supabase
+            .from('subscriptions')
+            .select('*')
+            .eq('telegram_user_id', callbackUserId)
+            .eq('status', 'active')
+            .maybeSingle();
+
+          const isPremium = subscription && new Date(subscription.expires_at) > new Date();
+
+          if (!isPremium) {
+            // Показать попап Premium
+            const premiumKeyboard = {
+              inline_keyboard: [
+                [
+                  { text: '💰 Купить Premium', callback_data: 'buy_premium' }
+                ],
+                [
+                  { text: '⬅️ Назад к выбору', callback_data: 'tone_back_to_selection' }
+                ]
+              ]
+            };
+
+            await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                chat_id: callbackChatId,
+                text: '💎 Стиль Mentor доступен в Premium\n\nPremium ($10.99/мес):\n- Безлимитные сообщения\n- 3 тональности коуча\n- История 30 дней',
+                reply_markup: premiumKeyboard
+              })
+            });
+
+            return res.status(200).json({ ok: true });
+          }
+        }
+
+        // Активировать тональность
+        await setUserTone(callbackUserId, selectedTone);
+
+        const toneName = getToneName(selectedTone);
+        const toneDesc = getToneDescription(selectedTone);
+
+        await sendMessage(BOT_TOKEN, callbackChatId,
+          `✅ Стиль активирован: ${toneName}\n${toneDesc}\n\nЧто хочешь изменить прямо сейчас?`
+        );
+
+        return res.status(200).json({ ok: true });
+      }
+
+      // Возврат к выбору тональности
+      if (callbackData === 'tone_back_to_selection') {
+        const { data: subscription } = await supabase
+          .from('subscriptions')
+          .select('*')
+          .eq('telegram_user_id', callbackUserId)
+          .eq('status', 'active')
+          .maybeSingle();
+
+        const isPremium = subscription && new Date(subscription.expires_at) > new Date();
+
+        const toneKeyboard = {
+          inline_keyboard: [
+            [
+              { text: '⚡ Focused', callback_data: 'tone_focused' },
+              { text: '💬 Baddy', callback_data: 'tone_baddy' }
+            ],
+            [
+              { text: isPremium ? '👔 Mentor' : '🔒 Mentor - Premium', callback_data: 'tone_mentor' }
+            ]
+          ]
+        };
+
+        await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: callbackChatId,
+            text: '🎨 Выбери стиль коуча:\n\n⚡ Focused - Минимум слов, максимум действий\n\n💬 Baddy - Как с другом, который не даёт врать себе\n\n👔 Mentor - Вежливо, структурированно, как бизнес-коуч',
+            reply_markup: toneKeyboard
+          })
+        });
+
+        return res.status(200).json({ ok: true });
+      }
+
       return res.status(200).json({ ok: true });
     }    
     
@@ -78,25 +171,109 @@ export default async function handler(req, res) {
 
     // ========== КОМАНДА /start ==========
     if (messageText === '/start') {
-      const welcomeMessage = `Привет! Я не советчик — я коуч, который задаёт вопросы.\n\nЧто ты хочешь изменить прямо сейчас?\n\nПобороть прокрастинацию? Найти фокус? Разобраться с целями? Или у тебя свой запрос?\n\nПиши мне — попробуем решить.`;
-      await sendMessage(BOT_TOKEN, chatId, welcomeMessage);
+      // Проверить есть ли уже выбранная тональность
+      const { data: existingPreference } = await supabase
+        .from('user_preferences')
+        .select('tone')
+        .eq('telegram_user_id', userId)
+        .maybeSingle();
+
+      if (!existingPreference) {
+        // Первый раз - показать выбор тональности
+        const { data: subscription } = await supabase
+          .from('subscriptions')
+          .select('*')
+          .eq('telegram_user_id', userId)
+          .eq('status', 'active')
+          .maybeSingle();
+
+        const isPremium = subscription && new Date(subscription.expires_at) > new Date();
+
+        const toneKeyboard = {
+          inline_keyboard: [
+            [
+              { text: '⚡ Focused', callback_data: 'tone_focused' },
+              { text: '💬 Baddy', callback_data: 'tone_baddy' }
+            ],
+            [
+              { text: isPremium ? '👔 Mentor' : '🔒 Mentor - Premium', callback_data: 'tone_mentor' }
+            ]
+          ]
+        };
+
+        await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: chatId,
+            text: '🎨 Привет! Выбери стиль коуча:\n\n⚡ Focused - Минимум слов, максимум действий\n\n💬 Baddy - Как с другом, который не даёт врать себе\n\n👔 Mentor - Вежливо, структурированно, как бизнес-коуч\n\nМожешь сменить в любой момент через /tone',
+            reply_markup: toneKeyboard
+          })
+        });
+      } else {
+        // Уже есть тональность - обычное приветствие
+        const welcomeMessage = `Привет! Я не советчик — я коуч, который задаёт вопросы.\n\nЧто ты хочешь изменить прямо сейчас?\n\nПобороть прокрастинацию? Найти фокус? Разобраться с целями? Или у тебя свой запрос?\n\nПиши мне — попробуем решить.`;
+        await sendMessage(BOT_TOKEN, chatId, welcomeMessage);
+      }
+      
+      return res.status(200).json({ ok: true });
+    }
+
+    // ========== КОМАНДА /tone ==========
+    if (messageText === '/tone') {
+      const { data: subscription } = await supabase
+        .from('subscriptions')
+        .select('*')
+        .eq('telegram_user_id', userId)
+        .eq('status', 'active')
+        .maybeSingle();
+
+      const isPremium = subscription && new Date(subscription.expires_at) > new Date();
+      const currentTone = await getUserTone(userId);
+      const toneName = getToneName(currentTone);
+
+      const toneKeyboard = {
+        inline_keyboard: [
+          [
+            { text: '⚡ Focused', callback_data: 'tone_focused' },
+            { text: '💬 Baddy', callback_data: 'tone_baddy' }
+          ],
+          [
+            { text: isPremium ? '👔 Mentor' : '🔒 Mentor - Premium', callback_data: 'tone_mentor' }
+          ]
+        ]
+      };
+
+      await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text: `🎨 Текущий стиль: ${toneName}\n\nВыбери новый:`,
+          reply_markup: toneKeyboard
+        })
+      });
+
       return res.status(200).json({ ok: true });
     }
 
     // ========== КОМАНДА /clear ==========
     if (messageText === '/clear') {
-      const { error } = await supabase
+      // Удалить историю чата
+      await supabase
         .from('telegram_chats')
         .delete()
         .eq('telegram_user_id', userId);
 
-      if (error) {
-        console.error('❌ Clear history error:', error);
-        await sendMessage(BOT_TOKEN, chatId, 'Oops, couldn\'t clear history. Try again?');
-      } else {
-        await sendMessage(BOT_TOKEN, chatId, '✅ Chat history cleared! Fresh start.');
-        console.log(`🗑️ History cleared for user ${userId}`);
-      }
+      // Удалить summaries
+      await supabase
+        .from('message_summaries')
+        .delete()
+        .eq('telegram_user_id', userId);
+
+      await sendMessage(BOT_TOKEN, chatId, '✅ Chat history cleared! Fresh start.');
+      console.log(`🗑️ History cleared for user ${userId}`);
+      
       return res.status(200).json({ ok: true });
     }
 
@@ -124,6 +301,38 @@ export default async function handler(req, res) {
         const aiMessages = data.filter(m => m.role === 'assistant').length;
         const total = data.length;
 
+        // Получить streak
+        const { data: allCheckins } = await supabase
+          .from('checkins')
+          .select('checkin_date')
+          .eq('telegram_user_id', userId)
+          .order('checkin_date', { ascending: false });
+
+        let streak = 0;
+        if (allCheckins && allCheckins.length > 0) {
+          const today = new Date().toISOString().split('T')[0];
+          const lastCheckin = allCheckins[0].checkin_date;
+          
+          // Проверить был ли чекин сегодня или вчера
+          const lastCheckinDate = new Date(lastCheckin);
+          const todayDate = new Date(today);
+          const diffDays = Math.floor((todayDate - lastCheckinDate) / (1000 * 60 * 60 * 24));
+          
+          if (diffDays <= 1) {
+            streak = 1;
+            for (let i = 0; i < allCheckins.length - 1; i++) {
+              const current = new Date(allCheckins[i].checkin_date);
+              const next = new Date(allCheckins[i + 1].checkin_date);
+              const diff = (current - next) / (1000 * 60 * 60 * 24);
+              if (diff === 1) {
+                streak++;
+              } else {
+                break;
+              }
+            }
+          }
+        }
+
         let planInfo = '';
         if (isPremium) {
           const planName = subscription.plan === 'premium' ? '💎 Premium' : '🏆 Pro';
@@ -134,7 +343,9 @@ export default async function handler(req, res) {
           planInfo = `Тариф: 📦 FREE (осталось ${remaining}/50 сообщений)\n\n`;
         }
 
-        const statsMessage = `📊 *Твоя статистика:*\n\n${planInfo}` +
+        const streakInfo = streak > 0 ? `🔥 Streak: ${streak} дней подряд\n` : '';
+
+        const statsMessage = `📊 *Твоя статистика:*\n\n${planInfo}${streakInfo}` +
           `Всего сообщений: ${total}\n` +
           `Твоих: ${userMessages}\n` +
           `От AI: ${aiMessages}`;
@@ -314,6 +525,10 @@ export default async function handler(req, res) {
     
     await sendChatAction(BOT_TOKEN, chatId, 'typing');
 
+    // Получить тональность пользователя
+    const userTone = await getUserTone(userId);
+    const systemPrompt = getPromptByTone(userTone);
+
     // Загрузить историю с учетом summarization для Premium
     let conversationHistory = [];
 
@@ -344,7 +559,7 @@ export default async function handler(req, res) {
       conversationHistory = historyData ? historyData.reverse() : [];
     }
     
-    console.log(`📚 Loaded ${conversationHistory.length} messages from history (Premium: ${isPremium})`);
+    console.log(`📚 Loaded ${conversationHistory.length} messages from history (Premium: ${isPremium}, Tone: ${userTone})`);
 
     const messages = [
       ...conversationHistory,
@@ -355,14 +570,14 @@ export default async function handler(req, res) {
       model: MODEL,
       max_tokens: 200,
       temperature: 0.8,
-      system: COACHING_SYSTEM,
+      system: systemPrompt,
       messages: messages
     });
 
     const reply = aiResponse.content[0].text;
     const wordCount = reply.split(/\s+/).length;
 
-    console.log(`🤖 AI Response (${wordCount} words): ${reply}`);
+    console.log(`🤖 AI Response (${wordCount} words, tone: ${userTone}): ${reply}`);
 
     await supabase.from('telegram_chats').insert({
       telegram_user_id: userId,
