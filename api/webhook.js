@@ -568,7 +568,7 @@ export default async function handler(req, res) {
 
     const aiResponse = await anthropic.messages.create({
       model: MODEL,
-      max_tokens: 200,
+      max_tokens: 300,
       temperature: 0.8,
       system: systemPrompt,
       messages: messages
